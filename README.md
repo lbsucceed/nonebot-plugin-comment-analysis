@@ -73,7 +73,7 @@ plugins = ["nonebot_plugin_comment_analysis"]
 在 NoneBot 的 `.env`/`.env.*` 中可以直接写小写键：
 
 ```
-bili_sessdata=SESSDATA=xxx
+bili_sessdata=xxx
 proxy=http://127.0.0.1:10809
 gemini_key=YOUR_GEMINI_KEY
 ```
