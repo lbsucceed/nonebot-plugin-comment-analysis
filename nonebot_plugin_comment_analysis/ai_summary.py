@@ -2,11 +2,16 @@
 import asyncio
 import httpx
 from typing import List, Dict
-from nonebot import get_driver, logger
+from nonebot import logger
+from nonebot.plugin import get_plugin_config
 from .config import Config
 
 # 加载配置
-plugin_config = Config.parse_obj(get_driver().config.dict())
+try:
+    plugin_config = get_plugin_config(Config)
+except Exception:
+    plugin_config = Config()
+
 GEMINI_KEY = plugin_config.gemini_key
 OPENAI_BASE_URL = plugin_config.openai_base_url
 OPENAI_API_KEY = plugin_config.openai_api_key

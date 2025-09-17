@@ -11,7 +11,7 @@ from bilibili_api import video, Credential, live, article
 from bilibili_api.favorite_list import get_video_favorite_list_content
 from bilibili_api.opus import Opus
 from bilibili_api.video import VideoDownloadURLDataDetecter
-from nonebot import on_regex, get_driver
+from nonebot import on_regex
 from nonebot.adapters.onebot.v11 import Message, Event, Bot, MessageSegment
 from nonebot.adapters.onebot.v11.event import GroupMessageEvent, PrivateMessageEvent
 from nonebot.matcher import current_bot
@@ -34,13 +34,15 @@ __plugin_meta__ = PluginMetadata(
     config=Config,
 )
 
-config = get_plugin_config(Config)
+try:
+    plugin_config = get_plugin_config(Config)
+except Exception:
+    plugin_config = Config()
 
 # 从配置加载
-plugin_config = Config.parse_obj(get_driver().config.dict())
-GLOBAL_NICKNAME: str = str(getattr(plugin_config, "r_global_nickname", "Bot"))
-BILI_SESSDATA: str = str(getattr(plugin_config, "bili_sessdata", ""))
-VIDEO_DURATION_MAXIMUM: int = int(getattr(plugin_config, "video_duration_maximum", 480))
+GLOBAL_NICKNAME: str = str(plugin_config.r_global_nickname or "Bot")
+BILI_SESSDATA: str = str(plugin_config.bili_sessdata or "")
+VIDEO_DURATION_MAXIMUM: int = int(plugin_config.video_duration_maximum or 480)
 VIDEO_MAX_MB: int = 100  # 假设一个默认值
 
 # 构建哔哩哔哩的Credential
