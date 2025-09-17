@@ -30,7 +30,10 @@ from .config import Config
 __plugin_meta__ = PluginMetadata(
     name="Bilibili 评论分析插件",
     description="一个专门用于解析Bilibili链接并分析评论和生成词云的插件",
+    type="application",
+    homepage="https://github.com/lbsucceed/nonebot-plugin-comment-analysis",
     usage="发送Bilibili链接即可触发",
+    supported_adapters={"~onebot.v11"},
     config=Config,
 )
 
