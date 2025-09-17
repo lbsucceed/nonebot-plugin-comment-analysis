@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    paths:
+      - "nonebot_plugin_comment_analysis/**"
+      - "pyproject.toml"
+      - "README.md"
+      - ".github/workflows/**"
+
+jobs:
+  smoke:
+    name: Smoke Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Import check
+        run: |
+          python -c "import nonebot_plugin_comment_analysis"
+
+      - name: Compile sources
+        run: python -m compileall nonebot_plugin_comment_analysis
+
+      - name: pip check
+        run: pip check

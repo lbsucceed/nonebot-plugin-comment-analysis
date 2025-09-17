@@ -1,16 +1,13 @@
 import asyncio
-import csv
 import os
 import re
 import time
-import itertools
 from typing import cast, List, Union, Iterable
 from urllib.parse import urlparse, parse_qs
-from xml.etree import ElementTree as ET
 
 import aiofiles
 import httpx
-from bilibili_api import video, Credential, live, article, comment
+from bilibili_api import video, Credential, live, article
 from bilibili_api.favorite_list import get_video_favorite_list_content
 from bilibili_api.opus import Opus
 from bilibili_api.video import VideoDownloadURLDataDetecter
@@ -20,12 +17,19 @@ from nonebot.adapters.onebot.v11.event import GroupMessageEvent, PrivateMessageE
 from nonebot.matcher import current_bot
 from nonebot.plugin import PluginMetadata, get_plugin_config
 
-from .bilibili_analysis import download_b_file, merge_file_to_mp4, extra_bili_info
+from .bilibili_analysis import (
+    download_b_file,
+    merge_file_to_mp4,
+    extra_bili_info,
+    get_danmaku_and_comments_async,
+    generate_wordcloud_from_list,
+)
+from .ai_summary import get_ai_summary, generate_ai_analysis
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
     name="Bilibili 评论分析插件",
-    description="一个专门用于解析Bilibili链接并分析评论的插件",
+    description="一个专门用于解析Bilibili链接并分析评论和生成词云的插件",
     usage="发送Bilibili链接即可触发",
     config=Config,
 )
@@ -128,83 +132,17 @@ async def auto_video_send(event: Event, data_path: str):
                 os.unlink(path)
 
 
-# ==================== 弹幕评论导出功能 ====================
-
-async def get_danmaku_list_async(bvid: str) -> List[str]:
-    danmaku_list = []
-    try:
-        async with httpx.AsyncClient() as client:
-            url = f"https://api.bilibili.com/x/player/pagelist?bvid={bvid}&jsonp=jsonp"
-            resp = await client.get(url, headers=BILIBILI_HEADER)
-            cid = resp.json()["data"][0]["cid"]
-
-            xml_url = f"https://api.bilibili.com/x/v1/dm/list.so?oid={cid}"
-            resp = await client.get(xml_url, headers=BILIBILI_HEADER)
-            resp.encoding = "utf-8"
-            root = ET.fromstring(resp.text)
-            danmaku_list.extend(d.text for d in root.findall("d"))
-    except Exception as e:
-        print(f"获取弹幕失败: {e}")
-    return danmaku_list
-
-
-async def get_comments_list_async(aid: int, max_comments=2000) -> List[str]:
-    comments_list = []
-    try:
-        page = 1
-        count = 0
-        while count < max_comments:
-            res = await comment.get_comments(
-                oid=aid,
-                type_=comment.CommentResourceType.VIDEO,
-                page_index=page,
-                credential=credential
-            )
-            replies = res.get("replies", [])
-            if not replies:
-                break
-            for r in replies:
-                comments_list.append(f"{r['member']['uname']}:{r['content']['message']},点赞：{r['like']}")
-                count += 1
-                for reply in r.get("replies", []):
-                    comments_list.append(f"回复@{r['member']['uname']}: {reply['content']['message']}")
-                    count += 1
-            if res["page"]["num"] * res["page"]["size"] >= res["page"]["count"]:
-                break
-            page += 1
-            await asyncio.sleep(0.3)
-    except Exception as e:
-        print(f"获取评论失败: {e}")
-    return comments_list
-
-
-async def create_danmaku_comment_csv_async(bvid: str, aid: int) -> str:
-    danmakus, comments = await asyncio.gather(
-        get_danmaku_list_async(bvid),
-        get_comments_list_async(aid)
-    )
-    file_path = os.path.join(os.getcwd(), f"{bvid}_弹幕评论.csv")
-
-    async with aiofiles.open(file_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        await writer.writerow(["弹幕", "评论"])
-        for danmaku, comment_text in itertools.zip_longest(danmakus, comments, fillvalue=""):
-            await writer.writerow([danmaku, comment_text])
-
-    print(f"数据已保存至: {file_path}")
-    return file_path
-
-
 # ==================== Bilibili 解析器核心 ====================
 
 bili_matcher = on_regex(
     r"(bilibili.com|b23.tv|bili2233.cn|^BV[0-9a-zA-Z]{10}$)", priority=1, block=True
 )
 
+
 @bili_matcher.handle()
 async def handle_bilibili(bot: Bot, event: Event) -> None:
     url: str = str(event.message).strip()
-    url_reg = r"(http:|https:)\\/\/(space|www|live).bilibili.com\/[A-Za-z\d._?%&+\-=\/#]*"
+    url_reg = r"(http:|https:)\/\/(space|www|live).bilibili.com\/[A-Za-z\d._?%&+\-=\/#]*"
     b_short_rex = r"(https?://(?:b23\.tv|bili2233\.cn)/[A-Za-z\d._?%&+\-=\/#]+)"
 
     if re.match(r'^BV[1-9a-zA-Z]{10}$', url):
@@ -227,7 +165,8 @@ async def handle_bilibili(bot: Bot, event: Event) -> None:
         if dynamic_info:
             title = dynamic_info['item']['basic']['title']
             desc = ""
-            if paragraphs := [m.get('module_content', {}).get('paragraphs', []) for m in dynamic_info.get('item', {}).get('modules', [])]:
+            if paragraphs := [m.get('module_content', {}).get('paragraphs', []) for m in
+                             dynamic_info.get('item', {}).get('modules', [])]:
                 desc = paragraphs[0][0].get('text', {}).get('nodes', [{}])[0].get('word', {}).get('words', "")
                 pics = paragraphs[0][1].get('pic', {}).get('pics', [])
                 await bili_matcher.send(Message(f"{GLOBAL_NICKNAME}识别：B站动态，{title}\n{desc}"))
@@ -241,7 +180,7 @@ async def handle_bilibili(bot: Bot, event: Event) -> None:
         room_info = (await room.get_room_info())['room_info']
         title, cover, keyframe = room_info['title'], room_info['cover'], room_info['keyframe']
         await bili_matcher.send(Message([MessageSegment.image(cover), MessageSegment.image(keyframe),
-                                       MessageSegment.text(f"{GLOBAL_NICKNAME}识别：哔哩哔哩直播，{title}")]))
+                                         MessageSegment.text(f"{GLOBAL_NICKNAME}识别：哔哩哔哩直播，{title}")]))
         return
 
     if 'read' in url:
@@ -272,20 +211,21 @@ async def handle_bilibili(bot: Bot, event: Event) -> None:
     if not video_id_match:
         return
     video_id = video_id_match[1]
-    
+
     v = video.Video(bvid=video_id, credential=credential)
     video_info = await v.get_info()
     if not video_info:
         await bili_matcher.send(Message(f"{GLOBAL_NICKNAME}识别：B站，出错，无法获取数据！"))
         return
 
-    video_title, video_cover, video_desc, video_duration = video_info['title'], video_info['pic'], video_info['desc'], video_info['duration']
-    
+    video_title, video_cover, video_desc, video_duration = video_info['title'], video_info['pic'], video_info[
+        'desc'], video_info['duration']
+
     page_num = 0
     if parsed_url := urlparse(url):
         if query_params := parse_qs(parsed_url.query):
             page_num = int(query_params.get('p', [1])[0]) - 1
-    
+
     if 'pages' in video_info and page_num < len(video_info['pages']):
         video_duration = video_info['pages'][page_num].get('duration', video_duration)
 
@@ -294,19 +234,19 @@ async def handle_bilibili(bot: Bot, event: Event) -> None:
     online_str = f'🏄‍♂️ 总共 {online["total"]} 人在观看，{online["count"]} 人在网页端观看'
 
     info_msg = (
-                f"\n{GLOBAL_NICKNAME}识别：B站，{video_title_safe}\n{extra_bili_info(video_info)}\n"
-                f"📝 简介：{video_desc}\n{online_str}")
+        f"\n{GLOBAL_NICKNAME}识别：B站，{video_title_safe}\n{extra_bili_info(video_info)}\n"
+        f"📝 简介：{video_desc}\n{online_str}")
 
     if video_duration > VIDEO_DURATION_MAXIMUM:
         await bili_matcher.send(Message(MessageSegment.image(video_cover)) + Message(
-            f"{info_msg}\n---------\n⚠️ 当前视频时长 {video_duration // 60} 分钟，超过管理员设置的最长时间 {VIDEO_DURATION_MAXIMUM // 60} 分钟！"))
+            f"{info_msg}\n--------- \n⚠️ 当前视频时长 {video_duration // 60} 分钟，超过管理员设置的最长时间 {VIDEO_DURATION_MAXIMUM // 60} 分钟！"))
     else:
         await bili_matcher.send(Message(MessageSegment.image(video_cover)) + Message(info_msg))
         download_url_data = await v.get_download_url(page_index=page_num)
         detecter = VideoDownloadURLDataDetecter(download_url_data)
         streams = detecter.detect_best_streams()
         video_url, audio_url = streams[0].url, streams[1].url
-        
+
         path = os.path.join(os.getcwd(), video_id)
         video_path = f"{path}-video.m4s"
         audio_path = f"{path}-audio.m4s"
@@ -324,19 +264,71 @@ async def handle_bilibili(bot: Bot, event: Event) -> None:
                 if os.path.exists(f):
                     os.remove(f)
 
+    # --- 词云与热评分析 ---
     try:
-        await bili_matcher.send("正在导出弹幕和评论，请稍候...")
-        csv_file_path = await create_danmaku_comment_csv_async(bvid=video_id, aid=video_info['aid'])
-        await upload_both(bot, event, csv_file_path, os.path.basename(csv_file_path))
-        os.remove(csv_file_path)
-    except Exception as e:
-        print(f"导出弹幕评论CSV失败: {e}")
-        await bili_matcher.send("导出弹幕评论失败了。")
+        await bili_matcher.send("正在分析弹幕和评论，请稍候...")
+        danmakus, comments, top_comment = await get_danmaku_and_comments_async(
+            bvid=video_id, aid=video_info['aid'], credential=credential
+        )
 
-    if BILI_SESSDATA:
-        ai_conclusion = await v.get_ai_conclusion(await v.get_cid(0))
-        if ai_conclusion.get('model_result', {}).get('summary'):
-            summary_node = make_node_segment(bot.self_id, ["bilibili AI总结", ai_conclusion['model_result']['summary']])
-            await send_forward_both(bot, event, summary_node)
+        # 发送热评
+        if top_comment:
+            await bili_matcher.send(top_comment)
+
+        # 生成并发送弹幕词云
+        if danmakus:
+            danmaku_wordcloud_bytes = await generate_wordcloud_from_list(danmakus)
+            if danmaku_wordcloud_bytes:
+                await bili_matcher.send(
+                    Message("☁️ 弹幕词云：") + MessageSegment.image(danmaku_wordcloud_bytes)
+                )
+            else:
+                await bili_matcher.send("弹幕词云生成失败，可能是弹幕数量太少啦。")
+        else:
+            await bili_matcher.send("该视频暂无弹幕。")
+
+        # 生成并发送评论词云
+        if comments:
+            comment_wordcloud_bytes = await generate_wordcloud_from_list(comments)
+            if comment_wordcloud_bytes:
+                await bili_matcher.send(
+                    Message("☁️ 评论词云：") + MessageSegment.image(comment_wordcloud_bytes)
+                )
+            else:
+                await bili_matcher.send("评论词云生成失败，可能是评论数量太少啦。")
+        else:
+            await bili_matcher.send("该视频暂无评论。")
+
+        # --- AI 总结与分析 ---
+        if plugin_config.gemini_key or (plugin_config.openai_api_key and plugin_config.openai_base_url):
+            await bili_matcher.send("🤖 正在生成 AI 总结与分析，请稍候...")
+            
+            # 1. 生成初步总结
+            summary = await get_ai_summary(danmakus, comments)
+            
+            # 2. 基于初步总结和原始数据进行二次分析
+            analysis = await generate_ai_analysis(summary, danmakus, comments)
+
+            # 3. 将总结和分析合并为转发消息发送
+            bot_self_id = bot.self_id
+            forward_messages = [
+                make_node_segment(bot_self_id, f"📝 AI 初步总结:\n{summary}"),
+                make_node_segment(bot_self_id, f"🧠 AI 深度分析:\n{analysis}")
+            ]
+            await send_forward_both(bot, event, forward_messages)
+
+        else:
+            # 如果没有配置AI Key，则尝试使用B站自带的总结
+            if BILI_SESSDATA:
+                ai_conclusion = await v.get_ai_conclusion(await v.get_cid(0))
+                if ai_conclusion.get('model_result', {}).get('summary'):
+                    summary_node = make_node_segment(bot.self_id,
+                                                     ["bilibili AI总结", ai_conclusion['model_result']['summary']])
+                    await send_forward_both(bot, event, summary_node)
+
+
+    except Exception as e:
+        print(f"分析弹幕评论失败: {e}")
+        await bili_matcher.send("分析弹幕和评论时出错了。")
 
 
