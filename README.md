@@ -62,7 +62,7 @@ plugins = ["nonebot_plugin_comment_analysis"]
 | `gemini_key` | `str` \| `null` | Google Gemini API Key，配置后启用 AI 总结 |
 | `openai_base_url` | `str` | `null` | OpenAI 兼容接口地址（例如自建反代） |
 | `openai_api_key` | `str` | `null` | OpenAI API Key，与 `openai_base_url` 配套使用 |
-| `summary_model` | `str` | `"gemini-1.5-flash"` | 摘要与分析使用的模型名称 |
+| `summary_model` | `str` | `"gemini-2.5-flash"` | 摘要与分析使用的模型名称 |
 | `proxy` | `str` | `null` | 外部 API 请求代理，部署在国内时建议设置；无需代理可留空 |
 | `summary_max_length` | `int` | `1000` | 发送给大模型的上下文最大字符数 |
 | `summary_min_length` | `int` | `50` | 生成文本的最小长度约束 |
